@@ -407,6 +407,10 @@ _lock = None
 _server = None
 _alive = False
 _csrf_token = None
+_ratelimit_hits = 0
+
+# number of initial hits to '/ratelimit' answered with 429 before it behaves normally
+RATELIMIT_INITIAL_429 = 1
 
 def init(quiet=False):
     global _conn
@@ -962,6 +966,22 @@ class ReqHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b"<html><body>Request blocked: security policy violation (WAF)</body></html>")
                 return
+
+        # rate-limit emulator ('/ratelimit'): the first hit(s) answer 429 with a 'Retry-After', then
+        # it behaves like the default SQLi endpoint - so a client that honors the backoff and retries
+        # eventually gets through (drives the adaptive rate-limit handling)
+        if self.url == "/ratelimit":
+            global _ratelimit_hits
+            _ratelimit_hits += 1
+            if _ratelimit_hits <= RATELIMIT_INITIAL_429:
+                self.send_response(429)
+                self.send_header("Retry-After", "0")
+                self.send_header("Content-type", "text/html; charset=%s" % UNICODE_ENCODING)
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(b"<html><body>Too Many Requests</body></html>")
+                return
+            self.url = "/"
 
         if self.url == "/xxe":
             self.send_response(OK)

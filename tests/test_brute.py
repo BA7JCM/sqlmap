@@ -161,8 +161,10 @@ class TestBrute(DbmsStateMixin, unittest.TestCase):
 
         def _cbe(expression, expectingNone=True):
             calls["n"] += 1
-            # initial sanity probe uses two random strings (no real column name)
-            if "id" not in expression and "name" not in expression:
+            # initial sanity probe queries a random table, not the real 'users' one - so keying on the
+            # table name is collision-proof (unlike a column-name substring, which a random probe value
+            # can incidentally contain, e.g. 'id')
+            if "users" not in expression:
                 return False
             # MySQL numeric-type follow-up: `not checkBooleanExpression(... REGEXP '[^0-9]')`.
             # 'id' is numeric (no non-digit chars => probe False => numeric);

@@ -282,6 +282,7 @@ class HTTP_HEADER(object):
     RANGE = "Range"
     REFERER = "Referer"
     REFRESH = "Refresh"  # Reference: http://stackoverflow.com/a/283794
+    RETRY_AFTER = "Retry-After"
     SERVER = "Server"
     SET_COOKIE = "Set-Cookie"
     TRANSFER_ENCODING = "Transfer-Encoding"

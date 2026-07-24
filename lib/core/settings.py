@@ -20,7 +20,7 @@ from lib.core.enums import OS
 from thirdparty import six
 
 # sqlmap version (<major>.<minor>.<month>.<monthly commit>)
-VERSION = "1.10.7.181"
+VERSION = "1.10.7.182"
 TYPE = "dev" if VERSION.count('.') > 2 and VERSION.split('.')[-1] != '0' else "stable"
 TYPE_COLORS = {"dev": 33, "stable": 90, "pip": 34}
 VERSION_STRING = "sqlmap/%s#%s" % ('.'.join(VERSION.split('.')[:-1]) if VERSION.count('.') > 2 and VERSION.split('.')[-1] == '0' else VERSION, TYPE)
@@ -57,6 +57,17 @@ IPS_WAF_CHECK_TIMEOUT = 10
 # "injection" whose only TRUE/FALSE difference is the always-true payload being blocked (a status-code
 # false positive) rather than the back-end actually answering.
 WAF_BLOCK_HTTP_CODES = (403, 406, 429, 451, 501, 503)
+
+# HTTP status signalling that the client is being rate-limited (kept as a literal because Python 2's
+# httplib has no such constant)
+TOO_MANY_REQUESTS_HTTP_CODE = 429
+
+# Adaptive rate-limit handling: one-time backoff used when a rate-limited response carries no usable
+# 'Retry-After', the additive step by which the inter-request delay is raised on each hit, and the
+# ceiling for both the honored backoff and the auto-throttle (seconds)
+RATE_LIMIT_DEFAULT_DELAY = 1.0
+RATE_LIMIT_DELAY_STEP = 0.5
+RATE_LIMIT_MAX_DELAY = 60.0
 
 # Candidate tamper scripts for automatic WAF-bypass, ordered by empirical WAF-bypass value
 # (structural token-substitution first, camouflage last; per identYwaf data). The back-end DBMS

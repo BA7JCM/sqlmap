@@ -6,6 +6,8 @@ See the file 'LICENSE' for copying permission
 """
 
 import binascii
+import calendar
+import email.utils
 import inspect
 import io
 import logging
@@ -119,9 +121,13 @@ from lib.core.settings import PERMISSION_DENIED_REGEX
 from lib.core.settings import PLAIN_TEXT_CONTENT_TYPE
 from lib.core.settings import RANDOM_INTEGER_MARKER
 from lib.core.settings import RANDOM_STRING_MARKER
+from lib.core.settings import RATE_LIMIT_DEFAULT_DELAY
+from lib.core.settings import RATE_LIMIT_DELAY_STEP
+from lib.core.settings import RATE_LIMIT_MAX_DELAY
 from lib.core.settings import REPLACEMENT_MARKER
 from lib.core.settings import SAFE_HEX_MARKER
 from lib.core.settings import TEXT_CONTENT_TYPE_REGEX
+from lib.core.settings import TOO_MANY_REQUESTS_HTTP_CODE
 from lib.core.settings import UNENCODED_ORIGINAL_VALUE
 from lib.core.settings import UNICODE_ENCODING
 from lib.core.settings import URI_HTTP_HEADER
@@ -222,6 +228,49 @@ class Connect(object):
 
         kwargs['retrying'] = True
         return Connect._getPageProxy(**kwargs)
+
+    @staticmethod
+    def _parseRetryAfter(responseHeaders):
+        """
+        Parses a 'Retry-After' response header (RFC 7231 delta-seconds or an HTTP-date) into a number
+        of seconds to wait, or None when it is absent or unparseable.
+        """
+
+        value = (responseHeaders.get(HTTP_HEADER.RETRY_AFTER) if responseHeaders else None) or ""
+        value = value.strip()
+
+        if value.isdigit():
+            return float(value)
+
+        parsed = email.utils.parsedate(value)
+        return max(0.0, calendar.timegm(parsed) - time.time()) if parsed else None
+
+    @staticmethod
+    def _rateLimitRetry(responseHeaders, code, **kwargs):
+        """
+        Handles a rate-limited response by honoring its 'Retry-After' (capped), adaptively raising the
+        inter-request delay so subsequent requests self-throttle under the limit, then re-issuing the
+        request. Returns the retried (page, headers, code) or None when the retry budget is exhausted,
+        so the caller can surface the rate-limited response as-is.
+        """
+
+        threadData = getCurrentThreadData()
+        if threadData.retriesCount >= conf.retries or kb.threadException:
+            return None
+
+        retryAfter = Connect._parseRetryAfter(responseHeaders)
+        backoff = min(retryAfter if retryAfter is not None else RATE_LIMIT_DEFAULT_DELAY, RATE_LIMIT_MAX_DELAY)
+
+        # additive-increase throttle: nudge the inter-request delay up toward a sustainable pace. The
+        # auto-throttle is capped, but a larger user-set '--delay' is never lowered. It is monotonic,
+        # so a lost concurrent update across threads self-heals on the next hit.
+        conf.delay = max(conf.delay or 0, min(RATE_LIMIT_MAX_DELAY, (conf.delay or 0) + RATE_LIMIT_DELAY_STEP))
+
+        singleTimeWarnMessage("target appears to be rate-limiting requests; sqlmap is backing off and throttling accordingly (consider raising '--delay' or lowering '--threads')")
+        logger.debug("rate-limited (HTTP %d)%s; sleeping %.1f second(s), inter-request delay now %.1f second(s)" % (code, " honoring 'Retry-After'" if retryAfter is not None else "", backoff, conf.delay))
+
+        time.sleep(backoff)
+        return Connect._retryProxy(**kwargs)
 
     @staticmethod
     def _connReadProxy(conn):
@@ -844,7 +893,13 @@ class Connect(object):
                 raise SystemExit
 
             if ex.code not in (conf.ignoreCode or []):
-                if ex.code == _http_client.UNAUTHORIZED:
+                if ex.code == TOO_MANY_REQUESTS_HTTP_CODE or (ex.code == _http_client.SERVICE_UNAVAILABLE and Connect._parseRetryAfter(responseHeaders) is not None):
+                    retried = Connect._rateLimitRetry(responseHeaders, ex.code, **kwargs)
+                    if retried is not None:
+                        return retried
+                    debugMsg = "target kept rate-limiting after %d retries (%d)" % (conf.retries, code)
+                    logger.debug(debugMsg)
+                elif ex.code == _http_client.UNAUTHORIZED:
                     errMsg = "not authorized, try to provide right HTTP "
                     errMsg += "authentication type and valid credentials (%d). " % code
                     errMsg += "If this is intended, try to rerun by providing "
